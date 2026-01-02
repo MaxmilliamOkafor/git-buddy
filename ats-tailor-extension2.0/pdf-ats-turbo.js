@@ -1,5 +1,5 @@
-// pdf-ats-turbo.js - 100% ATS-Parseable PDF Generator (≤800ms)
-// Exact formatting per recruiter requirements
+// pdf-ats-turbo.js - 100% ATS-Parseable PDF Generator (≤500ms)
+// CLEAN SKILLS SECTION - No keyword injection to avoid recruiter stuffing flags
 
 (function() {
   'use strict';
@@ -7,7 +7,7 @@
   const PDFATSTurbo = {
     // ============ PDF CONFIGURATION (ATS-PERFECT) ============
     CONFIG: {
-      // Font: Arial or Calibri, 10-11pt
+      // Font: Arial 10pt
       font: 'helvetica', // jsPDF uses helvetica as Arial equivalent
       fontSize: {
         name: 14,
@@ -17,7 +17,7 @@
       },
       // Margins: 0.75 inches all sides (54pt)
       margins: {
-        top: 54,      // 0.75" = 54pt
+        top: 54,
         bottom: 54,
         left: 54,
         right: 54
@@ -29,47 +29,40 @@
       pageHeight: 841.89
     },
 
-    // ============ SECTION HEADERS (All caps, bold) ============
-    SECTION_ORDER: [
-      'CONTACT INFORMATION',
-      'PROFESSIONAL SUMMARY',
-      'EXPERIENCE',
-      'SKILLS',
-      'EDUCATION',
-      'CERTIFICATIONS'
-    ],
+    // ============ CORE TECHNICAL SKILLS (MAX 20, NO JOB KEYWORDS) ============
+    // These are the candidate's actual skills - NEVER modified by job keywords
+    CORE_SKILLS_LIMIT: 20,
 
-    // ============ GENERATE ATS-PERFECT CV PDF (≤800ms) ============
-    async generateATSPerfectCV(candidateData, tailoredCV, jobData, keywords = []) {
+    // ============ GENERATE ATS-PERFECT CV PDF (≤500ms) ============
+    async generateATSPerfectCV(candidateData, tailoredCV, jobData, workExperienceKeywords = []) {
       const startTime = performance.now();
-      console.log('[PDFATSTurbo] Generating ATS-perfect CV...');
+      console.log('[PDFATSTurbo] Generating ATS-perfect CV (clean skills, WE keywords only)...');
 
       // Parse and format CV content
-      const formattedContent = this.formatCVForATS(tailoredCV, candidateData, keywords);
+      const formattedContent = this.formatCVForATS(tailoredCV, candidateData, workExperienceKeywords);
       
       // Build PDF text (UTF-8 text-only binary)
-      const pdfText = this.buildPDFText(formattedContent, candidateData, jobData);
+      const pdfText = this.buildPDFText(formattedContent);
       
       // Generate filename: {FirstName}_{LastName}_CV.pdf
       const firstName = (candidateData?.firstName || candidateData?.first_name || 'Applicant').replace(/\s+/g, '_');
       const lastName = (candidateData?.lastName || candidateData?.last_name || '').replace(/\s+/g, '_');
       const fileName = lastName ? `${firstName}_${lastName}_CV.pdf` : `${firstName}_CV.pdf`;
 
-      // Generate actual PDF if jsPDF available
       let pdfBase64 = null;
       let pdfBlob = null;
 
       if (typeof jspdf !== 'undefined' && jspdf.jsPDF) {
-        const pdfResult = await this.generateWithJsPDF(formattedContent, candidateData, jobData);
+        const pdfResult = await this.generateWithJsPDF(formattedContent, candidateData);
         pdfBase64 = pdfResult.base64;
         pdfBlob = pdfResult.blob;
       } else {
-        // Fallback: Generate text for backend
+        // Fallback: text-based PDF
         pdfBase64 = btoa(unescape(encodeURIComponent(pdfText)));
       }
 
       const timing = performance.now() - startTime;
-      console.log(`[PDFATSTurbo] CV PDF generated in ${timing.toFixed(0)}ms (target: 800ms)`);
+      console.log(`[PDFATSTurbo] CV PDF generated in ${timing.toFixed(0)}ms (target: 500ms)`);
 
       return {
         pdf: pdfBase64,
@@ -78,15 +71,15 @@
         text: pdfText,
         formattedContent,
         timing,
-        size: pdfBase64 ? Math.round(pdfBase64.length * 0.75 / 1024) : 0 // Approximate KB
+        size: pdfBase64 ? Math.round(pdfBase64.length * 0.75 / 1024) : 0
       };
     },
 
-    // ============ FORMAT CV FOR ATS (EXACT REQUIREMENTS) ============
-    formatCVForATS(cvText, candidateData, keywords = []) {
+    // ============ FORMAT CV FOR ATS ============
+    formatCVForATS(cvText, candidateData, workExperienceKeywords = []) {
       const sections = {};
       
-      // CONTACT INFORMATION (centered)
+      // CONTACT INFORMATION
       sections.contact = this.buildContactSection(candidateData);
       
       // Parse existing CV sections
@@ -95,11 +88,11 @@
       // PROFESSIONAL SUMMARY
       sections.summary = parsed.summary || '';
       
-      // EXPERIENCE - Inject keywords naturally into bullets
-      sections.experience = this.formatExperienceWithKeywords(parsed.experience, keywords);
+      // EXPERIENCE - Already has keywords injected from tailorCV
+      sections.experience = parsed.experience || '';
       
-      // SKILLS - Comma-separated plain text (critical for keyword matching)
-      sections.skills = this.formatSkillsSection(parsed.skills, keywords);
+      // SKILLS - CLEAN: Max 20 core skills, comma-separated, NO job keywords
+      sections.skills = this.formatCleanSkillsSection(parsed.skills);
       
       // EDUCATION
       sections.education = parsed.education || '';
@@ -119,13 +112,12 @@
       const email = candidateData?.email || '';
       const linkedin = candidateData?.linkedin || '';
       const github = candidateData?.github || '';
-      const portfolio = candidateData?.portfolio || '';
       const location = candidateData?.city || candidateData?.location || 'Open to relocation';
 
       return {
         name,
-        contactLine: [phone, email, location, 'open to relocation'].filter(Boolean).join(' | '),
-        linksLine: [linkedin, github, portfolio].filter(Boolean).join(' | ')
+        contactLine: [phone, email, location].filter(Boolean).join(' | '),
+        linksLine: [linkedin, github].filter(Boolean).join(' | ')
       };
     },
 
@@ -143,7 +135,7 @@
 
       const patterns = {
         summary: /(?:PROFESSIONAL\s*SUMMARY|SUMMARY|PROFILE|OBJECTIVE)[\s:]*\n([\s\S]*?)(?=\n(?:EXPERIENCE|WORK|SKILLS|EDUCATION|CERTIFICATIONS|$))/i,
-        experience: /(?:EXPERIENCE|WORK\s*EXPERIENCE|EMPLOYMENT)[\s:]*\n([\s\S]*?)(?=\n(?:SKILLS|EDUCATION|CERTIFICATIONS|$))/i,
+        experience: /(?:EXPERIENCE|WORK\s*EXPERIENCE|EMPLOYMENT|PROFESSIONAL\s*EXPERIENCE)[\s:]*\n([\s\S]*?)(?=\n(?:SKILLS|EDUCATION|CERTIFICATIONS|$))/i,
         skills: /(?:SKILLS|TECHNICAL\s*SKILLS|CORE\s*SKILLS)[\s:]*\n([\s\S]*?)(?=\n(?:EDUCATION|CERTIFICATIONS|$))/i,
         education: /(?:EDUCATION|ACADEMIC)[\s:]*\n([\s\S]*?)(?=\n(?:CERTIFICATIONS|$))/i,
         certifications: /(?:CERTIFICATIONS?|LICENSES?)[\s:]*\n([\s\S]*?)$/i
@@ -159,105 +151,44 @@
       return sections;
     },
 
-    // ============ FORMAT EXPERIENCE WITH KEYWORD INJECTION ============
-    formatExperienceWithKeywords(experienceText, keywords = []) {
-      if (!experienceText) return '';
+    // ============ FORMAT CLEAN SKILLS SECTION ============
+    // CRITICAL: NO job keyword injection - only core technical skills
+    formatCleanSkillsSection(skillsText) {
+      if (!skillsText) return '';
       
-      const lines = experienceText.split('\n');
-      const keywordsLower = keywords.map(k => k.toLowerCase());
-      const usedKeywords = new Set();
-      let keywordIndex = 0;
-      const maxKeywordsPerBullet = 2;
+      // Extract existing skills only
+      const existingSkills = [];
       
-      const formattedLines = lines.map(line => {
-        const trimmed = line.trim();
-        
-        // Check if it's a bullet point
-        if (trimmed.startsWith('-') || trimmed.startsWith('•') || trimmed.startsWith('*')) {
-          let bulletContent = trimmed.replace(/^[-•*]\s*/, '');
-          const bulletLower = bulletContent.toLowerCase();
-          
-          // Count how many keywords already in this bullet
-          let existingCount = 0;
-          keywordsLower.forEach(kw => {
-            if (bulletLower.includes(kw)) existingCount++;
-          });
-          
-          // Inject up to 2 keywords per bullet if missing
-          if (existingCount < maxKeywordsPerBullet && keywordIndex < keywords.length) {
-            const toAdd = [];
-            while (toAdd.length < (maxKeywordsPerBullet - existingCount) && keywordIndex < keywords.length) {
-              const kw = keywords[keywordIndex];
-              if (!bulletLower.includes(kw.toLowerCase()) && !usedKeywords.has(kw.toLowerCase())) {
-                toAdd.push(kw);
-                usedKeywords.add(kw.toLowerCase());
-              }
-              keywordIndex++;
-            }
-            
-            if (toAdd.length > 0) {
-              // Naturally weave keywords into the bullet (not listed separately)
-              if (bulletContent.endsWith('.')) {
-                bulletContent = bulletContent.slice(0, -1) + `, leveraging ${toAdd.join(' and ')}.`;
-              } else {
-                bulletContent = bulletContent + ` utilizing ${toAdd.join(' and ')}`;
-              }
-            }
-          }
-          
-          return `-  ${bulletContent}`;
-        }
-        
-        return line;
-      });
+      // Parse comma-separated, bullet points, or line-separated skills
+      const skillWords = skillsText
+        .replace(/[•\-*]/g, ',')
+        .split(/[,\n]/)
+        .map(s => s.trim())
+        .filter(s => s.length >= 2 && s.length <= 50);
       
-      return formattedLines.join('\n');
-    },
-
-    // ============ FORMAT SKILLS SECTION (COMMA-SEPARATED) ============
-    formatSkillsSection(skillsText, keywords = []) {
-      // Collect all skills from existing text
-      const existingSkills = new Set();
-      
-      if (skillsText) {
-        // Extract words from skills section
-        const skillWords = skillsText
-          .replace(/[•\-*]/g, ',')
-          .split(/[, \n]/)
-          .map(s => s.trim())
-          .filter(s => s.length >= 2 && s.length <= 50);
-        skillWords.forEach(s => existingSkills.add(s));
-      }
-      
-      // Add missing keywords (proper nouns keep capitalization)
-      const properNouns = new Set([
-        'Python', 'SQL', 'TensorFlow', 'Spark', 'XGBoost', 'LightGBM', 'AWS', 'Azure',
-        'Google Cloud Platform', 'Kubernetes', 'Docker', 'Terraform', 'Apache Spark',
-        'Airflow', 'Kafka', 'Snowflake', 'Jenkins', 'GitHub Actions', 'Agile', 'Scrum'
-      ]);
-      
-      keywords.forEach(kw => {
-        const kwLower = kw.toLowerCase();
-        const hasIt = [...existingSkills].some(s => s.toLowerCase() === kwLower);
-        if (!hasIt) {
-          // Check if it's a proper noun
-          const proper = [...properNouns].find(p => p.toLowerCase() === kwLower);
-          existingSkills.add(proper || kw.toLowerCase());
+      skillWords.forEach(s => {
+        if (!existingSkills.includes(s)) {
+          existingSkills.push(s);
         }
       });
       
-      // Return comma-separated list (no bullets for first line per requirements)
-      return [...existingSkills].join(', ');
+      // Limit to MAX 20 core technical skills
+      const coreSkills = existingSkills.slice(0, this.CORE_SKILLS_LIMIT);
+      
+      // Return comma-separated, single line, Arial 10pt format
+      return coreSkills.join(', ');
     },
 
     // ============ BUILD PDF TEXT (UTF-8) ============
-    buildPDFText(sections, candidateData, jobData) {
+    buildPDFText(sections) {
       const lines = [];
       
-      // CONTACT INFORMATION (centered)
+      // CONTACT INFORMATION
       lines.push(sections.contact.name.toUpperCase());
       lines.push(sections.contact.contactLine);
-      lines.push(sections.contact.linksLine);
+      if (sections.contact.linksLine) {
+        lines.push(sections.contact.linksLine);
+      }
       lines.push('');
       
       // PROFESSIONAL SUMMARY
@@ -274,7 +205,7 @@
         lines.push('');
       }
       
-      // SKILLS (comma-separated)
+      // SKILLS (clean, comma-separated)
       if (sections.skills) {
         lines.push('SKILLS');
         lines.push(sections.skills);
@@ -297,8 +228,8 @@
       return lines.join('\n');
     },
 
-    // ============ GENERATE WITH jsPDF (≤800ms) ============
-    async generateWithJsPDF(sections, candidateData, jobData) {
+    // ============ GENERATE WITH jsPDF (≤500ms) ============
+    async generateWithJsPDF(sections, candidateData) {
       const { jsPDF } = jspdf;
       const { font, fontSize, margins, lineHeight, pageWidth, pageHeight } = this.CONFIG;
       const contentWidth = pageWidth - margins.left - margins.right;
@@ -332,7 +263,7 @@
 
       // Helper: Add section header (ALL CAPS, BOLD)
       const addSectionHeader = (title) => {
-        yPos += 8; // Section spacing
+        yPos += 8;
         doc.setFontSize(fontSize.sectionTitle);
         doc.setFont(font, 'bold');
         doc.text(title.toUpperCase(), margins.left, yPos);
@@ -371,10 +302,8 @@
         expLines.forEach(line => {
           const trimmed = line.trim();
           if (trimmed.startsWith('-') || trimmed.startsWith('•')) {
-            // Bullet point
             addText(trimmed, false, false, fontSize.body);
           } else if (trimmed.includes('|') || /^\d{4}/.test(trimmed) || /[A-Z]{2,}/.test(trimmed.substring(0, 30))) {
-            // Job title/company line
             addText(trimmed, true, false, fontSize.body);
           } else if (trimmed) {
             addText(trimmed, false, false, fontSize.body);
@@ -382,7 +311,7 @@
         });
       }
 
-      // SKILLS (comma-separated, plain text)
+      // SKILLS (comma-separated, single line, NO keyword injection)
       if (sections.skills) {
         addSectionHeader('SKILLS');
         addText(sections.skills, false, false, fontSize.body);
@@ -400,7 +329,6 @@
         addText(sections.certifications, false, false, fontSize.body);
       }
 
-      // Generate output
       const base64 = doc.output('datauristring').split(',')[1];
       const blob = doc.output('blob');
 
@@ -411,12 +339,14 @@
     async generateCoverLetterPDF(candidateData, coverLetterText, jobData) {
       const startTime = performance.now();
       
-      // CRITICAL: Replace "Dear Hiring Committee," with "Dear Hiring Manager,"
+      // CRITICAL: Replace all greetings with "Dear Hiring Manager,"
       let formattedCoverLetter = coverLetterText || '';
       formattedCoverLetter = formattedCoverLetter.replace(/Dear\s+Hiring\s+Committee,?/gi, 'Dear Hiring Manager,');
       formattedCoverLetter = formattedCoverLetter.replace(/Dear\s+Sir\/Madam,?/gi, 'Dear Hiring Manager,');
       formattedCoverLetter = formattedCoverLetter.replace(/To\s+Whom\s+It\s+May\s+Concern,?/gi, 'Dear Hiring Manager,');
+      formattedCoverLetter = formattedCoverLetter.replace(/Dear\s+Recruiter,?/gi, 'Dear Hiring Manager,');
       
+      // Generate filename: {FirstName}_{LastName}_Cover_Letter.pdf
       const firstName = (candidateData?.firstName || candidateData?.first_name || 'Applicant').replace(/\s+/g, '_');
       const lastName = (candidateData?.lastName || candidateData?.last_name || '').replace(/\s+/g, '_');
       const fileName = lastName ? `${firstName}_${lastName}_Cover_Letter.pdf` : `${firstName}_Cover_Letter.pdf`;
@@ -452,7 +382,7 @@
             doc.text(line, margins.left, yPos);
             yPos += fontSize.body * lineHeight;
           });
-          yPos += 10; // Paragraph spacing
+          yPos += 10;
         });
 
         pdfBase64 = doc.output('datauristring').split(',')[1];
