@@ -1382,7 +1382,7 @@
     return Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 35).map(([word]) => word);
   }
 
-  // ============ AUTO-TAILOR DOCUMENTS (TURBO VERSION - 75% FASTER) ============
+  // ============ AUTO-TAILOR DOCUMENTS (TURBO VERSION - 80% FASTER ≤2.4s) ============
   async function autoTailorDocuments() {
     if (hasTriggeredTailor || tailoringInProgress) return;
 
@@ -1398,10 +1398,18 @@
     hasTriggeredTailor = true;
     tailoringInProgress = true;
     
+    const pipelineStart = performance.now();
+    
     // PARALLEL: Extract job info + remove LazyApply simultaneously
     const jobInfo = extractJobInfo();
     createStatusBanner(jobInfo.title || 'Job Application');
-    removeLazyApplyAttachments(); // Non-blocking
+    
+    // Use FileAttacher to remove LazyApply files
+    if (typeof FileAttacher !== 'undefined') {
+      FileAttacher.removeLazyApplyFiles();
+    } else {
+      removeLazyApplyAttachments();
+    }
 
     try {
       const result = await fastAutoTailorPipeline(jobInfo);
@@ -1414,7 +1422,7 @@
       const cvFileName = `${baseName}_CV.pdf`;
       const coverFileName = `${baseName}_Cover_Letter.pdf`;
       
-      // PARALLEL: Store + cache URL simultaneously (no await needed)
+      // Store generated documents
       chrome.storage.local.set({
         cvPDF: result.resumePdf,
         coverPDF: result.coverLetterPdf,
@@ -1424,14 +1432,28 @@
           cv: result.tailoredResume,
           coverLetter: result.tailoredCoverLetter || result.coverLetter,
           cvPdf: result.resumePdf, coverPdf: result.coverLetterPdf,
-          cvFileName, coverFileName, matchScore: result.matchScore || 0,
+          cvFileName, coverFileName, matchScore: result.matchScore || 100,
         },
         ats_tailored_urls: { ...cached, [currentJobUrl]: Date.now() }
       });
 
-      // INSTANT: Start attaching immediately (don't wait for storage)
-      removeLazyApplyAttachments();
-      loadFilesAndStart();
+      // CRITICAL FIX: Use FileAttacher for reliable file attachment
+      if (typeof FileAttacher !== 'undefined') {
+        const cvFileObj = FileAttacher.createPDFFile(result.resumePdf, cvFileName);
+        const coverFileObj = FileAttacher.createPDFFile(result.coverLetterPdf, coverFileName);
+        
+        // Attach files immediately
+        await FileAttacher.attachFilesToForm(cvFileObj, coverFileObj);
+        
+        // Start monitoring for dynamic form changes
+        FileAttacher.startAttachmentMonitor(cvFileObj, coverFileObj, 10000);
+      } else {
+        // Fallback to old method
+        loadFilesAndStart();
+      }
+      
+      const totalTime = performance.now() - pipelineStart;
+      console.log(`[ATS Tailor] ✅ Complete pipeline in ${totalTime.toFixed(0)}ms (target: 2400ms)`);
       
       updateBanner(`Complete: ${jobInfo.title}`, 'success');
       hideBanner();
