@@ -55,6 +55,9 @@
         "tailor-universal.js",
         "validation-engine.js",
         "dynamic-score.js",
+        "turbo-pipeline.js",
+        "pdf-ats-turbo.js",
+        "file-attacher.js",
         "content.js"
       ],
       "css": ["content.css"],
@@ -82,7 +85,10 @@
         "reliable-extractor.js",
         "tailor-universal.js",
         "validation-engine.js",
-        "dynamic-score.js"
+        "dynamic-score.js",
+        "turbo-pipeline.js",
+        "pdf-ats-turbo.js",
+        "file-attacher.js"
       ],
       "matches": ["<all_urls>"]
     }
