@@ -259,6 +259,45 @@
     });
   }
 
+  // ============ SMALL UTILS ============
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // Prevent native file picker from opening when we must click "Attach" buttons
+  // that internally call input[type=file].click().
+  function suppressFilePickerClicks(durationMs = 450) {
+    try {
+      const proto = HTMLInputElement?.prototype;
+      if (!proto) return;
+
+      const original = proto.click;
+      // Avoid double-wrapping
+      if (original.__atsTailorWrapped) return;
+
+      function wrappedClick(...args) {
+        try {
+          if ((this?.type || '').toLowerCase() === 'file') {
+            console.log('[ATS Tailor] Suppressed file picker open');
+            return;
+          }
+        } catch {}
+        return original.apply(this, args);
+      }
+
+      wrappedClick.__atsTailorWrapped = true;
+      wrappedClick.__atsTailorOriginal = original;
+
+      proto.click = wrappedClick;
+
+      setTimeout(() => {
+        try {
+          if (HTMLInputElement.prototype.click === wrappedClick) {
+            HTMLInputElement.prototype.click = original;
+          }
+        } catch {}
+      }, durationMs);
+    } catch {}
+  }
+
   // ============ KILL X BUTTONS (4.0 PROVEN LOGIC - SCOPED) ============
   function killXButtons() {
     const isNearFileInput = (el) => {
@@ -337,22 +376,33 @@
     return attached;
   }
 
-  // ============ GREENHOUSE COVER LETTER ATTACH BUTTON CLICK ============
-  function clickGreenhouseCoverAttach() {
+  // ============ GREENHOUSE COVER LETTER ATTACH BUTTON CLICK ==========
+  // NOTE: On some ATS (notably Greenhouse), clicking "Attach" triggers the native
+  // file picker via input[type=file].click(). We suppress that so the extension can
+  // programmatically set input.files without opening the explorer.
+  function clickGreenhouseCoverAttach(opts = {}) {
+    const { suppressDialog = true } = opts;
+
+    if (suppressDialog) suppressFilePickerClicks(650);
+
     const allLabels = document.querySelectorAll('label, h3, h4, span, div, fieldset');
     for (const label of allLabels) {
       const text = (label.textContent || '').trim().toLowerCase();
       if (text.includes('cover letter') && text.length < 30) {
-        const container = label.closest('fieldset') || label.closest('.field') || label.closest('section') || label.parentElement?.parentElement;
+        const container =
+          label.closest('fieldset') ||
+          label.closest('.field') ||
+          label.closest('section') ||
+          label.parentElement?.parentElement;
         if (!container) continue;
-        
+
         const buttons = container.querySelectorAll('button, a[role="button"], [class*="attach"]');
         for (const btn of buttons) {
           const btnText = (btn.textContent || '').trim().toLowerCase();
           if (btnText === 'attach' || btnText.includes('attach')) {
-            console.log('[ATS Tailor] 📎 Clicking Greenhouse Cover Letter "Attach" button');
-            try { 
-              btn.click(); 
+            console.log('[ATS Tailor] 📎 Clicking Greenhouse Cover Letter "Attach" button (suppressed picker)');
+            try {
+              btn.click();
               return true;
             } catch (e) {}
           }
@@ -362,59 +412,76 @@
     return false;
   }
 
-  // ============ FORCE COVER REPLACE (FIXED: ASYNC + RETRY LOGIC) ============
+  // ============ FORCE COVER REPLACE (FIXED: NO FILE PICKER + RETRY) ==========
   async function forceCoverReplace() {
     if (!coverFile && !coverLetterText) return false;
     let attached = false;
 
-    // GREENHOUSE FIX: Click "Attach" button first to reveal file input
-    const clickedAttach = clickGreenhouseCoverAttach();
-    
-    // Wait for file input to appear after clicking Attach button
-    if (clickedAttach) {
-      await new Promise(r => setTimeout(r, 100));
+    // Only click "Attach" (to reveal inputs) if we can't already see a cover upload field.
+    const hasCoverInputAlready = Array.from(document.querySelectorAll('input[type="file"]')).some((i) => isCoverField(i));
+
+    if (coverFile && !hasCoverInputAlready) {
+      const clickedAttach = clickGreenhouseCoverAttach({ suppressDialog: true });
+      if (clickedAttach) await sleep(80);
     }
 
     // Try to attach cover letter file
     if (coverFile) {
-      const fileInputs = document.querySelectorAll('input[type="file"]');
-      for (const input of fileInputs) {
-        if (!isCoverField(input)) continue;
-
-        if (input.files && input.files.length > 0) {
-          attached = true;
-          continue;
-        }
-
-        const dt = new DataTransfer();
-        dt.items.add(coverFile);
-        input.files = dt.files;
-        fireEvents(input);
-        attached = true;
-        updateStatus('cover', '✅');
-        console.log('[ATS Tailor] Cover Letter attached!');
-      }
-      
-      // RETRY: If no cover field found, click Attach again and retry
-      if (!attached) {
-        clickGreenhouseCoverAttach();
-        await new Promise(r => setTimeout(r, 150));
-        
-        const retryInputs = document.querySelectorAll('input[type="file"]');
-        for (const input of retryInputs) {
-          if (!isCoverField(input)) continue;
+      const attachToInput = (input, logTag = '') => {
+        try {
+          if (!input) return false;
           if (input.files && input.files.length > 0) {
             attached = true;
-            continue;
+            return true;
           }
-          
           const dt = new DataTransfer();
           dt.items.add(coverFile);
           input.files = dt.files;
           fireEvents(input);
           attached = true;
           updateStatus('cover', '✅');
-          console.log('[ATS Tailor] Cover Letter attached (retry)!');
+          console.log(`[ATS Tailor] Cover Letter attached${logTag}!`);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+
+      let matchedCoverField = false;
+      const fileInputs = Array.from(document.querySelectorAll('input[type="file"]'));
+
+      // Primary: explicit cover letter field
+      for (const input of fileInputs) {
+        if (!isCoverField(input)) continue;
+        matchedCoverField = true;
+        attachToInput(input);
+      }
+
+      // Fallback: if ATS doesn't label the cover field well, attach to the first non-CV empty input
+      if (!attached && !matchedCoverField && fileInputs.length > 0) {
+        const candidates = fileInputs.filter((i) => !isCVField(i));
+        const ordered = (candidates.length ? candidates : fileInputs).filter((i) => !(i.files && i.files.length > 0));
+        if (ordered[0]) attachToInput(ordered[0], ' (fallback)');
+      }
+
+      // RETRY: If still not attached, click Attach again (suppressed) and retry once
+      if (!attached) {
+        const clickedAttach = clickGreenhouseCoverAttach({ suppressDialog: true });
+        if (clickedAttach) await sleep(140);
+
+        const retryInputs = Array.from(document.querySelectorAll('input[type="file"]'));
+        let matchedRetryCoverField = false;
+
+        for (const input of retryInputs) {
+          if (!isCoverField(input)) continue;
+          matchedRetryCoverField = true;
+          attachToInput(input, ' (retry)');
+        }
+
+        if (!attached && !matchedRetryCoverField && retryInputs.length > 0) {
+          const candidates = retryInputs.filter((i) => !isCVField(i));
+          const ordered = (candidates.length ? candidates : retryInputs).filter((i) => !(i.files && i.files.length > 0));
+          if (ordered[0]) attachToInput(ordered[0], ' (fallback retry)');
         }
       }
     }
@@ -439,29 +506,39 @@
     return attached;
   }
 
-  // ============ FORCE EVERYTHING (4.0 PROVEN LOGIC - ASYNC) ============
+  // ============ FORCE EVERYTHING (4.0 PROVEN LOGIC - ASYNC) ==========
   async function forceEverything() {
-    document.querySelectorAll('[data-qa-upload], [data-qa="upload"], [data-qa="attach"]').forEach(btn => {
-      const parent = btn.closest('.field') || btn.closest('[class*="upload"]') || btn.parentElement;
-      const existingInput = parent?.querySelector('input[type="file"]');
-      if (!existingInput || existingInput.offsetParent === null) {
-        try { btn.click(); } catch {}
-      }
-    });
+    // Clicking upload/attach buttons often opens the native file picker.
+    // We only click them if there are NO file inputs at all (to force the ATS to render them),
+    // and we suppress file-picker clicks while doing so.
+    const hadAnyFileInputs = document.querySelectorAll('input[type="file"]').length > 0;
 
-    // GREENHOUSE FIX: Click "Attach" button for Cover Letter section
-    clickGreenhouseCoverAttach();
+    if (!hadAnyFileInputs) {
+      suppressFilePickerClicks(650);
+      document.querySelectorAll('[data-qa-upload], [data-qa="upload"], [data-qa="attach"]').forEach((btn) => {
+        const parent = btn.closest('.field') || btn.closest('[class*="upload"]') || btn.parentElement;
+        const existingInput = parent?.querySelector('input[type="file"]');
+        if (!existingInput || existingInput.offsetParent === null) {
+          try {
+            btn.click();
+          } catch {}
+        }
+      });
 
-    document.querySelectorAll('input[type="file"]').forEach(input => {
+      // Greenhouse cover letter attach reveal (suppressed)
+      clickGreenhouseCoverAttach({ suppressDialog: true });
+      await sleep(80);
+    }
+
+    // Reveal hidden inputs (some ATS hide them behind custom UI)
+    document.querySelectorAll('input[type="file"]').forEach((input) => {
       if (input.offsetParent === null) {
         input.style.cssText = 'display:block !important; visibility:visible !important; opacity:1 !important; position:relative !important;';
       }
     });
 
-    // Attach CV first (sync)
+    // Attach both from a single user action (no file explorer)
     forceCVReplace();
-    
-    // Attach cover letter (async with retry)
     await forceCoverReplace();
   }
 
@@ -482,7 +559,11 @@
     const fileInputs = Array.from(document.querySelectorAll('input[type="file"]'));
     const cvOk = !cvFile || fileInputs.some((i) => isCVField(i) && i.files && i.files.length > 0);
     const coverOk = (!coverFile && !coverLetterText) ||
+      // Primary: explicit cover field
       fileInputs.some((i) => isCoverField(i) && i.files && i.files.length > 0) ||
+      // Fallback: if we had to attach to a non-labeled secondary input
+      (coverFile && fileInputs.length >= 2 && fileInputs.some((i) => !isCVField(i) && i.files && i.files.length > 0)) ||
+      // Textarea-based cover letter
       Array.from(document.querySelectorAll('textarea')).some((t) => /cover/i.test((t.labels?.[0]?.textContent || t.name || t.id || '')) && (t.value || '').trim().length > 0);
 
     return cvOk && coverOk;
