@@ -362,21 +362,28 @@
     return false;
   }
 
-  // ============ FORCE COVER REPLACE (4.0 PROVEN LOGIC) ============
-  function forceCoverReplace() {
+  // ============ FORCE COVER REPLACE (FIXED: ASYNC + RETRY LOGIC) ============
+  async function forceCoverReplace() {
     if (!coverFile && !coverLetterText) return false;
     let attached = false;
 
     // GREENHOUSE FIX: Click "Attach" button first to reveal file input
-    clickGreenhouseCoverAttach();
+    const clickedAttach = clickGreenhouseCoverAttach();
+    
+    // Wait for file input to appear after clicking Attach button
+    if (clickedAttach) {
+      await new Promise(r => setTimeout(r, 100));
+    }
 
+    // Try to attach cover letter file
     if (coverFile) {
-      document.querySelectorAll('input[type="file"]').forEach((input) => {
-        if (!isCoverField(input)) return;
+      const fileInputs = document.querySelectorAll('input[type="file"]');
+      for (const input of fileInputs) {
+        if (!isCoverField(input)) continue;
 
         if (input.files && input.files.length > 0) {
           attached = true;
-          return;
+          continue;
         }
 
         const dt = new DataTransfer();
@@ -386,9 +393,33 @@
         attached = true;
         updateStatus('cover', '✅');
         console.log('[ATS Tailor] Cover Letter attached!');
-      });
+      }
+      
+      // RETRY: If no cover field found, click Attach again and retry
+      if (!attached) {
+        clickGreenhouseCoverAttach();
+        await new Promise(r => setTimeout(r, 150));
+        
+        const retryInputs = document.querySelectorAll('input[type="file"]');
+        for (const input of retryInputs) {
+          if (!isCoverField(input)) continue;
+          if (input.files && input.files.length > 0) {
+            attached = true;
+            continue;
+          }
+          
+          const dt = new DataTransfer();
+          dt.items.add(coverFile);
+          input.files = dt.files;
+          fireEvents(input);
+          attached = true;
+          updateStatus('cover', '✅');
+          console.log('[ATS Tailor] Cover Letter attached (retry)!');
+        }
+      }
     }
 
+    // Try to fill cover letter textarea
     if (coverLetterText) {
       document.querySelectorAll('textarea').forEach((textarea) => {
         const label = textarea.labels?.[0]?.textContent || textarea.name || textarea.id || '';
@@ -408,8 +439,8 @@
     return attached;
   }
 
-  // ============ FORCE EVERYTHING (4.0 PROVEN LOGIC) ============
-  function forceEverything() {
+  // ============ FORCE EVERYTHING (4.0 PROVEN LOGIC - ASYNC) ============
+  async function forceEverything() {
     document.querySelectorAll('[data-qa-upload], [data-qa="upload"], [data-qa="attach"]').forEach(btn => {
       const parent = btn.closest('.field') || btn.closest('[class*="upload"]') || btn.parentElement;
       const existingInput = parent?.querySelector('input[type="file"]');
@@ -427,8 +458,11 @@
       }
     });
 
+    // Attach CV first (sync)
     forceCVReplace();
-    forceCoverReplace();
+    
+    // Attach cover letter (async with retry)
+    await forceCoverReplace();
   }
 
   // ============ TURBO-FAST REPLACE LOOP (LAZYAPPLY 3X TIMING) ============
@@ -460,10 +494,10 @@
 
     killXButtons();
 
-    attachLoop100ms = setInterval(() => {
+    attachLoop100ms = setInterval(async () => {
       if (!filesLoaded) return;
       forceCVReplace();
-      forceCoverReplace();
+      await forceCoverReplace();
 
       if (areBothAttached()) {
         console.log('[ATS Tailor] ⚡ Attach complete in <175ms — stopping loops');
@@ -471,9 +505,9 @@
       }
     }, 100);
 
-    attachLoop500ms = setInterval(() => {
+    attachLoop500ms = setInterval(async () => {
       if (!filesLoaded) return;
-      forceEverything();
+      await forceEverything();
 
       if (areBothAttached()) {
         console.log('[ATS Tailor] ⚡ Attach complete — stopping loops');
@@ -909,8 +943,11 @@
       console.log('[ATS Tailor] Files loaded, starting TURBO attach!');
       console.log('[ATS Tailor] CV:', cvFile ? '✓' : 'X', 'Cover:', coverFile ? '✓' : 'X');
 
-      forceEverything();
-      ultraFastReplace();
+      // Run async force attach with proper await
+      (async () => {
+        await forceEverything();
+        ultraFastReplace();
+      })();
     });
   }
 
@@ -946,7 +983,7 @@
           }
 
           filesLoaded = true;
-          forceEverything();
+          await forceEverything();
           ultraFastReplace();
 
           sendResponse({ success: true, message: `${type} attached successfully` });
